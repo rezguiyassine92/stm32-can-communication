@@ -2,12 +2,13 @@
 
 # CAN Bus Communication — Two STM32F407 Nodes
 
-### Real-time distributed LED synchronization over CAN 2.0, with MCP2551 transceivers
+### Real-time LED synchronization over CAN 2.0, with MCP2551 transceivers
 
 ![STM32](https://img.shields.io/badge/-STM32F407-03234B?style=for-the-badge&logo=stmicroelectronics)
 ![CAN](https://img.shields.io/badge/-CAN_2.0A-orange?style=for-the-badge)
 ![MCP2551](https://img.shields.io/badge/-MCP2551-blue?style=for-the-badge)
 ![C](https://img.shields.io/badge/-C-00599C?style=for-the-badge&logo=c)
+![HAL](https://img.shields.io/badge/-STM32_HAL-03234B?style=for-the-badge)
 
 `Embedded Communication` · `Multi-Master Bus` · `Interrupt-Driven RX` · `Physical Layer`
 
@@ -17,15 +18,13 @@
 
 ## 📋 Overview
 
-Two STM32F407 boards communicating over a real CAN 2.0 bus, using MCP2551 transceivers to drive the physical differential line. Each board runs the same firmware and acts as a peer — there is no master. Pressing a button on one node updates its local state and broadcasts the change; the other node receives the frame through a hardware interrupt and mirrors it in real time.
-
-The system was validated end-to-end: bit-timing configuration, hardware ID filtering, interrupt-driven reception, and bus arbitration when both nodes transmit at once.
+Two STM32F407 boards communicating over a real CAN 2.0 bus, using MCP2551 transceivers to drive the physical differential line. One board transmits a periodic CAN frame and toggles its own LED; the second board listens on the bus, receives the frame through a hardware interrupt (FIFO0), and toggles its LED in response — validating the full CAN cycle: transmit, hardware filtering, and interrupt-driven receive.
 
 ## ⚙️ Key Contributions
 
-- 🔗 Configuration and implementation of the CAN protocol on both nodes
+- 🔗 Configuration and implementation of the CAN protocol on both nodes (transmitter / receiver roles)
 - ⚙️ MCP2551 transceivers used for physical bus interfacing
-- 📡 Bidirectional real-time data exchange between two independent STM32F407 boards
+- 📡 Real-time data exchange validated between two independent STM32F407 boards
 - 🛠️ System validated under real communication conditions, captured on a PicoScope
 
 ## 🔧 Hardware
@@ -48,46 +47,99 @@ The system was validated end-to-end: bit-timing configuration, hardware ID filte
 Puis relier les deux transceivers : `CANH ↔ CANH`, `CANL ↔ CANL`, avec la résistance 120 Ω aux deux extrémités du bus.
 
 <div align="center">
-  <img src="images/pinout-can-tx.png" width="500" alt="Brochage CAN1_TX / CAN1_RX sur STM32F407VGTx">
-  <br><em>Configuration des broches CAN1_TX (PB9) / CAN1_RX (PB8) sur le STM32F407VGTx</em>
+  <img src="images/pinout_can_tx.png" width="480" alt="Brochage CAN1_TX / CAN1_RX — nœud émetteur">
+  <br><em>Broches CAN1_TX (PB9) / CAN1_RX (PB8) — nœud émetteur (STM32F407VGTx)</em>
+</div>
+
+<br>
+
+<div align="center">
+  <img src="images/pinout_can_rx.png" width="480" alt="Brochage CAN1_TX / CAN1_RX — nœud récepteur">
+  <br><em>Broches CAN1_TX (PB9) / CAN1_RX (PB8) — nœud récepteur (STM32F407VGTx)</em>
 </div>
 
 ## ⚡ Configuration CAN
 
 | Paramètre | Valeur |
 |---|---|
-| Périphérique | CAN1 (PB8 RX / PB9 TX, AF9) |
+| Périphérique | CAN1 (PB8 RX / PB9 TX) |
 | Mode | Normal |
 | Auto-retransmission | Désactivée |
-| Horloge CAN (APB1) | 42 MHz |
-| Prescaler | 16 |
-| Débit nominal | ≈ 375 kbit/s |
+| Prescaler | 1 |
+| Sync Jump Width | 1 TQ |
+| Time Segment 1 | 6 TQ |
+| Time Segment 2 | 1 TQ |
 | Format de trame | CAN 2.0A — ID standard 11 bits |
 | Réception | Interruption (CAN1_RX0, FIFO0) |
 
-La réception passe par un filtre matériel (masque d'ID) qui route les trames vers la FIFO0 : le CPU n'est interrompu que pour le trafic pertinent, sans scrutation active du bus.
+Le filtre matériel est configuré en mode `IDMASK` avec masque `0x00` (aucun filtrage restrictif), routant toutes les trames reçues vers la FIFO0 — le CPU n'est interrompu que sur réception effective, sans scrutation active du bus.
 
 ## 🔬 Validation — capture oscilloscope
 
 Trame CAN réelle capturée au PicoScope pendant l'échange entre les deux nœuds.
 
 <div align="center">
-  <img src="images/oscilloscope-can-frame.png" width="700" alt="Capture oscilloscope d'une trame CAN réelle">
+  <img src="images/oscilloscope_can_frame.png" width="700" alt="Capture oscilloscope d'une trame CAN réelle">
   <br><em>Signal numérique du bus CAN capturé en conditions réelles de communication</em>
 </div>
 
-## 🧠 Arbitrage du bus
+## 💻 Code — Nœud émetteur (Transmitter)
 
-Le CAN est multi-maître grâce à un arbitrage binaire non destructif : si deux nœuds émettent en même temps, chacun envoie son identifiant bit par bit tout en lisant le bus. Un bit dominant (0) l'emporte toujours sur un bit récessif (1) : dès qu'un nœud envoie un bit récessif mais lit un bit dominant, il sait qu'il a perdu l'arbitrage, s'arrête et devient récepteur — sans corrompre la trame gagnante. Pas d'arbitre central, pas de collision perdue.
+Configuration et envoi périodique d'une trame CAN, avec toggle LED synchronisé :
+
+```c
+// Configuration de l'en-tête de la trame CAN
+TxHeader.DLC = 1;              // 1 octet de données
+TxHeader.IDE = CAN_ID_STD;     // ID standard (11 bits)
+TxHeader.RTR = CAN_RTR_DATA;   // Trame de données
+TxHeader.StdId = 0x01;         // Identifiant du nœud émetteur
+
+HAL_CAN_Start(&hcan1);
+TxData[0] = 40;
+
+// Boucle principale : émission périodique
+while (1)
+{
+    HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox);
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);  // LED locale
+    HAL_Delay(500);
+}
+```
+
+## 💻 Code — Nœud récepteur (Receiver)
+
+Configuration du filtre matériel et réception interruptive via FIFO0 :
+
+```c
+// Configuration du filtre CAN (FIFO0, sans restriction d'ID)
+canfilterconfig.FilterActivation      = CAN_FILTER_ENABLE;
+canfilterconfig.FilterBank            = 10;
+canfilterconfig.FilterFIFOAssignment  = CAN_FILTER_FIFO0;
+canfilterconfig.FilterIdHigh          = 0x00;
+canfilterconfig.FilterIdLow           = 0x00;
+canfilterconfig.FilterMaskIdHigh      = 0x00;
+canfilterconfig.FilterMaskIdLow       = 0x00;
+canfilterconfig.FilterMode            = CAN_FILTERMODE_IDMASK;
+canfilterconfig.FilterScale           = CAN_FILTERSCALE_32BIT;
+
+HAL_CAN_ConfigFilter(&hcan1, &canfilterconfig);
+HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
+
+// Callback déclenché automatiquement à la réception d'une trame
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan1)
+{
+    HAL_CAN_GetRxMessage(hcan1, CAN_RX_FIFO0, &RxHeader, RxData);
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);  // LED miroir
+}
+```
 
 ## 🚀 Build & Flash
 
-1. Ouvrir le projet dans STM32CubeIDE
+1. Ouvrir chaque projet (`transmitter` / `receiver`) dans STM32CubeIDE
 2. Compiler en configuration Debug
-3. Flasher chaque carte via ST-LINK
-4. Donner à chaque nœud une identité distincte (inverser `OwnID` / `RemoteID` sur la seconde carte)
-5. Relier les deux transceivers avec la terminaison 120 Ω aux deux extrémités
-6. Appuyer sur le bouton — les deux LEDs doivent suivre en miroir
+3. Flasher chaque carte via ST-LINK — une carte avec le firmware émetteur, l'autre avec le firmware récepteur
+4. Relier les deux transceivers MCP2551 avec la terminaison 120 Ω aux deux extrémités
+5. Observer les deux LEDs se synchroniser en temps réel
 
 ## 🛠 Tech Stack
 

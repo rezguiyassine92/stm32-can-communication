@@ -1,8 +1,8 @@
 <div align="center">
 
-# CAN Bus Communication — Two STM32F407 Nodes
+# Communication CAN Bus — Deux Nœuds STM32F407
 
-### Real-time LED synchronization over CAN 2.0, with MCP2551 transceivers
+### Synchronisation LED en temps réel sur bus CAN 2.0, via transceivers MCP2551
 
 ![STM32](https://img.shields.io/badge/-STM32F407-03234B?style=for-the-badge&logo=stmicroelectronics)
 ![CAN](https://img.shields.io/badge/-CAN_2.0A-orange?style=for-the-badge)
@@ -10,24 +10,46 @@
 ![C](https://img.shields.io/badge/-C-00599C?style=for-the-badge&logo=c)
 ![HAL](https://img.shields.io/badge/-STM32_HAL-03234B?style=for-the-badge)
 
-`Embedded Communication` · `Multi-Master Bus` · `Interrupt-Driven RX` · `Physical Layer`
+`Communication Embarquée` · `Bus Multi-Maître` · `Réception par Interruption` · `Couche Physique`
 
 </div>
 
 ---
 
-## 📋 Overview
+## 📋 Vue d'ensemble
 
-Two STM32F407 boards communicating over a real CAN 2.0 bus, using MCP2551 transceivers to drive the physical differential line. One board transmits a periodic CAN frame and toggles its own LED; the second board listens on the bus, receives the frame through a hardware interrupt (FIFO0), and toggles its LED in response — validating the full CAN cycle: transmit, hardware filtering, and interrupt-driven receive.
+Deux cartes STM32F407 communiquant sur un vrai bus CAN 2.0, en utilisant des transceivers MCP2551 pour piloter la ligne différentielle physique. Une carte émet périodiquement une trame CAN et fait clignoter sa propre LED ; la seconde carte écoute le bus, reçoit la trame via une interruption matérielle (FIFO0), et fait clignoter sa LED en réponse — validant ainsi le cycle CAN complet : émission, filtrage matériel, et réception interruptive.
 
-## ⚙️ Key Contributions
+## ⚙️ Contributions clés
 
-- 🔗 Configuration and implementation of the CAN protocol on both nodes (transmitter / receiver roles)
-- ⚙️ MCP2551 transceivers used for physical bus interfacing
-- 📡 Real-time data exchange validated between two independent STM32F407 boards
-- 🛠️ System validated under real communication conditions, captured on a PicoScope
+- 🔗 Configuration et implémentation du protocole CAN sur les deux nœuds (rôles émetteur / récepteur)
+- ⚙️ Utilisation des transceivers MCP2551 pour l'interface physique du bus
+- 📡 Échange de données en temps réel validé entre deux cartes STM32F407 indépendantes
+- 🛠️ Système validé en conditions réelles de communication, capturé à l'oscilloscope PicoScope
 
-## 🔧 Hardware
+## 🏗️ Architecture du système
+
+```mermaid
+flowchart LR
+    subgraph N1["Nœud Émetteur"]
+        M1[STM32F407<br/>CAN1] -->|PB9 TX| T1[MCP2551]
+    end
+
+    subgraph N2["Nœud Récepteur"]
+        T2[MCP2551] -->|PB8 RX| M2[STM32F407<br/>CAN1]
+    end
+
+    T1 <-->|CAN_H / CAN_L<br/>120 Ω terminaison| T2
+    M2 -->|Interruption FIFO0| L2[LED miroir<br/>PD12]
+    M1 -->|Toggle| L1[LED locale<br/>PD12]
+
+    style M1 fill:#3b5bfd,color:#fff
+    style M2 fill:#0aa6a1,color:#fff
+    style T1 stroke:#f2a53d,stroke-width:2px
+    style T2 stroke:#f2a53d,stroke-width:2px
+```
+
+## 🔧 Matériel
 
 | Composant | Rôle |
 |---|---|
@@ -140,6 +162,14 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan1)
 3. Flasher chaque carte via ST-LINK — une carte avec le firmware émetteur, l'autre avec le firmware récepteur
 4. Relier les deux transceivers MCP2551 avec la terminaison 120 Ω aux deux extrémités
 5. Observer les deux LEDs se synchroniser en temps réel
+
+## 🔭 Pistes d'amélioration
+
+- **Auto-retransmission** : l'activer pour une meilleure robustesse en cas d'erreur de bus (actuellement désactivée)
+- **Passer à l'arbitrage réel multi-maître** : faire en sorte que les deux nœuds puissent émettre de façon autonome (sur bouton) plutôt qu'un rôle fixe émetteur/récepteur, afin de démontrer l'arbitrage bit-à-bit du CAN
+- **Ajouter un 3ᵉ et 4ᵉ nœud** : étendre le réseau pour valider le filtrage par ID et la priorité entre plusieurs trafics simultanés
+- **Détection d'erreurs** : exploiter les registres d'état CAN (`ESR`) pour journaliser les erreurs de bus (bit stuffing, CRC, ACK)
+- **Payload structuré** : encoder plusieurs informations dans les 8 octets de données (au lieu d'un seul octet), avec un vrai protocole applicatif au-dessus du CAN
 
 ## 🛠 Tech Stack
 
